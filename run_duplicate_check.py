@@ -183,6 +183,36 @@ class HubSpotDuplicateChecker:
             self.logger.error(f"❌ Error marking leads as fetched: {e}")
             return False
 
+    def unmark_leads_as_fetched(self, lead_ids: List[int]) -> bool:
+        """Unmark leads as fetched so they can be processed again"""
+        if not lead_ids:
+            return True
+            
+        self.logger.info(f"🔄 Unmarking {len(lead_ids)} leads as fetched (for retry)...")
+        
+        try:
+            url = f"{self.supabase_url}/rest/v1/contacts_grid_view"
+            
+            # Update in batches
+            batch_size = 100
+            for i in range(0, len(lead_ids), batch_size):
+                batch_ids = lead_ids[i:i + batch_size]
+                id_filter = ",".join(map(str, batch_ids))
+                
+                params = {"id": f"in.({id_filter})"}
+                payload = {"duplicate_check_fetched_at": None}  # Set to NULL
+                
+                response = requests.patch(url, headers=self.supabase_headers, params=params, json=payload)
+                response.raise_for_status()
+                
+                self.logger.info(f"✅ Unmarked batch {i//batch_size + 1} as fetched ({len(batch_ids)} leads)")
+            
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"❌ Error unmarking leads as fetched: {e}")
+            return False
+
     def search_hubspot_contact(self, lead: Dict) -> Tuple[Optional[str], Dict]:
         """Search for contact in HubSpot by email or phone"""
         email = lead.get('email', '').strip().lower()
@@ -629,6 +659,7 @@ class HubSpotDuplicateChecker:
         batch_success = 0
         batch_errors = 0
         processed_results = []
+        failed_lead_ids = []  # Track leads that failed to update
         
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
             # Submit leads with staggered start times to avoid rate limits
@@ -651,12 +682,19 @@ class HubSpotDuplicateChecker:
                         batch_success += 1
                     else:
                         batch_errors += 1
+                        failed_lead_ids.append(lead['id'])  # Track failed lead
                     
                     processed_results.append(result)
                     
                 except Exception as e:
                     self.logger.error(f"Error processing lead {lead.get('id')}: {e}")
                     batch_errors += 1
+                    failed_lead_ids.append(lead['id'])  # Track failed lead
+        
+        # Unmark failed leads so they can be processed in the next run
+        if failed_lead_ids:
+            self.logger.info(f"🔄 Unmarking {len(failed_lead_ids)} failed leads for retry...")
+            self.unmark_leads_as_fetched(failed_lead_ids)
         
         return processed_results, batch_success, batch_errors
 
