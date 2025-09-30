@@ -117,6 +117,29 @@ class HubSpotDuplicateChecker:
             # Record this call
             self.search_api_calls.append(current_time)
 
+    def get_unprocessed_leads_count(self) -> int:
+        """Get total count of unprocessed leads"""
+        try:
+            url = f"{self.supabase_url}/rest/v1/contacts_grid_view"
+            params = {
+                "select": "id",
+                "email": "not.is.null",
+                "property_name": "not.is.null",
+                "duplicate_check_completed_at": "is.null",
+                "duplicate_check_fetched_at": "is.null",
+                "limit": "100000"  # Get a large number to count
+            }
+            
+            response = requests.get(url, headers=self.supabase_headers, params=params)
+            response.raise_for_status()
+            
+            leads = response.json()
+            return len(leads)
+            
+        except Exception as e:
+            self.logger.error(f"❌ Error getting unprocessed count: {e}")
+            return 0
+
     def get_unprocessed_leads(self, batch_size: int = 500, offset: int = 0) -> List[Dict]:
         """Get unprocessed leads from Supabase"""
         self.logger.info(f"🔍 Fetching batch: size={batch_size}, offset={offset}")
@@ -706,6 +729,21 @@ class HubSpotDuplicateChecker:
         self.logger.info(f"📊 Batch size: {self.batch_size}, Max batches: {self.max_batches}")
         self.logger.info(f"⚡ Parallel workers: {self.max_workers}")
         
+        # Check initial unprocessed count
+        initial_unprocessed = self.get_unprocessed_leads_count()
+        self.logger.info(f"📋 Initial unprocessed leads: {initial_unprocessed:,}")
+        
+        if initial_unprocessed == 0:
+            self.logger.info("✅ No unprocessed leads found - all leads have been processed!")
+            return {
+                'total_processed': 0,
+                'successful': 0,
+                'errors': 0,
+                'elapsed_time': 0,
+                'initial_unprocessed': 0,
+                'remaining_unprocessed': 0
+            }
+        
         total_processed = 0
         total_success = 0
         total_errors = 0
@@ -739,20 +777,33 @@ class HubSpotDuplicateChecker:
         
         elapsed = time.time() - start_time
         
+        # Check remaining unprocessed count
+        remaining_unprocessed = self.get_unprocessed_leads_count()
+        
         # Final summary
         self.logger.info(f"\n🎉 FINAL SUMMARY:")
+        self.logger.info(f"   Initial unprocessed: {initial_unprocessed:,}")
         self.logger.info(f"   Total processed: {total_processed}")
         self.logger.info(f"   Successful updates: {total_success}")
         self.logger.info(f"   Errors: {total_errors}")
+        self.logger.info(f"   Remaining unprocessed: {remaining_unprocessed:,}")
         self.logger.info(f"   Success rate: {total_success/total_processed*100:.1f}%" if total_processed > 0 else "   Success rate: 0%")
         self.logger.info(f"   Total time elapsed: {elapsed:.1f} seconds")
         self.logger.info(f"   Overall rate: {total_processed/elapsed:.1f} leads/second")
+        
+        if remaining_unprocessed == 0:
+            self.logger.info("🎯 ALL LEADS PROCESSED! No more unprocessed leads remaining.")
+        elif remaining_unprocessed < initial_unprocessed:
+            progress_percent = ((initial_unprocessed - remaining_unprocessed) / initial_unprocessed) * 100
+            self.logger.info(f"📈 Progress: {progress_percent:.1f}% of leads completed")
         
         return {
             'total_processed': total_processed,
             'successful': total_success,
             'errors': total_errors,
-            'elapsed_time': elapsed
+            'elapsed_time': elapsed,
+            'initial_unprocessed': initial_unprocessed,
+            'remaining_unprocessed': remaining_unprocessed
         }
 
 def main():
