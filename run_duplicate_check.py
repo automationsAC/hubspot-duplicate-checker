@@ -57,13 +57,13 @@ class HubSpotDuplicateChecker:
         
         # Rate limiting tracking
         self.search_api_calls = []
-        self.search_api_limit = 5  # requests per second
+        self.search_api_limit = 3  # Conservative: 3 requests per second (instead of 5)
         
         # Thread-safe rate limiting
         self.crm_api_lock = threading.Lock()
         self.search_api_lock = threading.Lock()
         self.crm_api_calls = []
-        self.crm_api_limit = 100  # requests per 10 seconds
+        self.crm_api_limit = 80  # Conservative: 80 requests per 10 seconds (instead of 100)
         
         # Caching
         self.contact_cache = {}
@@ -72,7 +72,7 @@ class HubSpotDuplicateChecker:
         self.cache_lock = threading.Lock()
         
         # Parallel processing configuration
-        self.max_workers = 10  # Conservative number of parallel threads
+        self.max_workers = 3  # Reduced to avoid rate limits
         
         # Setup logging
         logging.basicConfig(
@@ -631,11 +631,14 @@ class HubSpotDuplicateChecker:
         processed_results = []
         
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            # Submit all leads for processing
-            future_to_lead = {
-                executor.submit(self.process_lead, lead, batch_start_index + i): lead 
-                for i, lead in enumerate(leads_batch)
-            }
+            # Submit leads with staggered start times to avoid rate limits
+            future_to_lead = {}
+            for i, lead in enumerate(leads_batch):
+                # Add small delay between submissions to spread out API calls
+                if i > 0:
+                    time.sleep(0.1)
+                future = executor.submit(self.process_lead, lead, batch_start_index + i)
+                future_to_lead[future] = lead
             
             # Process completed futures
             for future in as_completed(future_to_lead):
