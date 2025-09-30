@@ -1,0 +1,6 @@
+# Copy this to .env file for local testing
+# Replace with your actual API credentials
+SUPABASE_URL=your_supabase_url_here
+SUPABASE_API_KEY=your_supabase_api_key_here
+HUBSPOT_TOKEN=your_hubspot_token_here
+AIRTABLE_TOKEN=your_airtable_token_here
