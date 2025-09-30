@@ -724,11 +724,13 @@ def main():
         results = checker.run()
         
         # Exit with appropriate code
-        if results['errors'] == 0:
-            print("✅ All leads processed successfully!")
+        success_rate = results['successful'] / results['total_processed'] if results['total_processed'] > 0 else 0
+        
+        if success_rate >= 0.95:  # 95% success rate or higher is considered successful
+            print(f"✅ Successfully processed {results['successful']}/{results['total_processed']} leads ({success_rate*100:.1f}% success rate)")
             sys.exit(0)
         elif results['successful'] > 0:
-            print(f"⚠️ Processed {results['successful']} leads with {results['errors']} errors")
+            print(f"⚠️ Processed {results['successful']} leads with {results['errors']} errors ({success_rate*100:.1f}% success rate)")
             sys.exit(1)
         else:
             print("❌ Failed to process any leads")
