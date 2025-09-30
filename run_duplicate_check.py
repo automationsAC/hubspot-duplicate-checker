@@ -731,7 +731,8 @@ class HubSpotDuplicateChecker:
         
         # Check initial unprocessed count
         initial_unprocessed = self.get_unprocessed_leads_count()
-        self.logger.info(f"📋 Initial unprocessed leads: {initial_unprocessed:,}")
+        self.logger.info(f"📊 DATABASE STATUS CHECK:")
+        self.logger.info(f"   📋 Total unprocessed leads in database: {initial_unprocessed:,}")
         
         if initial_unprocessed == 0:
             self.logger.info("✅ No unprocessed leads found - all leads have been processed!")
@@ -743,6 +744,22 @@ class HubSpotDuplicateChecker:
                 'initial_unprocessed': 0,
                 'remaining_unprocessed': 0
             }
+        
+        # Calculate how many leads we can process in this run
+        max_can_process = self.batch_size * self.max_batches
+        actual_will_process = min(initial_unprocessed, max_can_process)
+        
+        self.logger.info(f"🎯 PROCESSING PLAN:")
+        self.logger.info(f"   📦 Batch size: {self.batch_size:,}")
+        self.logger.info(f"   🔄 Max batches: {self.max_batches}")
+        self.logger.info(f"   📊 Max can process this run: {max_can_process:,}")
+        self.logger.info(f"   🎯 Will actually process: {actual_will_process:,}")
+        
+        if actual_will_process < initial_unprocessed:
+            remaining_after_run = initial_unprocessed - actual_will_process
+            self.logger.info(f"   ⏳ Will remain unprocessed: {remaining_after_run:,} (next run)")
+        else:
+            self.logger.info(f"   🎯 Will process ALL remaining leads!")
         
         total_processed = 0
         total_success = 0
@@ -782,20 +799,21 @@ class HubSpotDuplicateChecker:
         
         # Final summary
         self.logger.info(f"\n🎉 FINAL SUMMARY:")
-        self.logger.info(f"   Initial unprocessed: {initial_unprocessed:,}")
-        self.logger.info(f"   Total processed: {total_processed}")
-        self.logger.info(f"   Successful updates: {total_success}")
-        self.logger.info(f"   Errors: {total_errors}")
-        self.logger.info(f"   Remaining unprocessed: {remaining_unprocessed:,}")
-        self.logger.info(f"   Success rate: {total_success/total_processed*100:.1f}%" if total_processed > 0 else "   Success rate: 0%")
-        self.logger.info(f"   Total time elapsed: {elapsed:.1f} seconds")
-        self.logger.info(f"   Overall rate: {total_processed/elapsed:.1f} leads/second")
+        self.logger.info(f"   📋 Unprocessed leads in DB (start): {initial_unprocessed:,}")
+        self.logger.info(f"   📊 Leads processed this run: {total_processed}")
+        self.logger.info(f"   ✅ Successful updates: {total_success}")
+        self.logger.info(f"   ❌ Errors: {total_errors}")
+        self.logger.info(f"   📋 Unprocessed leads in DB (end): {remaining_unprocessed:,}")
+        self.logger.info(f"   📈 Success rate: {total_success/total_processed*100:.1f}%" if total_processed > 0 else "   Success rate: 0%")
+        self.logger.info(f"   ⏱️ Total time elapsed: {elapsed:.1f} seconds")
+        self.logger.info(f"   🚀 Overall rate: {total_processed/elapsed:.1f} leads/second")
         
         if remaining_unprocessed == 0:
-            self.logger.info("🎯 ALL LEADS PROCESSED! No more unprocessed leads remaining.")
+            self.logger.info("🎯 ALL LEADS PROCESSED! Database is now fully processed.")
         elif remaining_unprocessed < initial_unprocessed:
             progress_percent = ((initial_unprocessed - remaining_unprocessed) / initial_unprocessed) * 100
-            self.logger.info(f"📈 Progress: {progress_percent:.1f}% of leads completed")
+            self.logger.info(f"📈 Database progress: {progress_percent:.1f}% of total leads completed")
+            self.logger.info(f"🔄 Next run will process the remaining {remaining_unprocessed:,} leads")
         
         return {
             'total_processed': total_processed,
