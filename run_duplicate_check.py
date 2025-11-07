@@ -18,6 +18,30 @@ from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
 
+# Load environment variables from .env file if available
+try:
+    from dotenv import load_dotenv
+    from pathlib import Path
+    env_file = Path(__file__).parent / '.env'
+    if env_file.exists():
+        load_dotenv(env_file)
+        print(f"[OK] Loaded environment from .env")
+except ImportError:
+    pass  # dotenv not available, assume env vars are set
+
+# Import domain blocking
+try:
+    from shared.domain_blocking import is_domain_blocked
+except ImportError:
+    # Fallback if shared module not available
+    def is_domain_blocked(email: str) -> tuple[bool, str]:
+        if not email:
+            return False, ''
+        email_lower = email.lower().strip()
+        if email_lower == 'n/a' or email_lower == 'na':
+            return True, 'blocked_email_pattern:n/a'
+        return False, ''
+
 try:
     from rapidfuzz import fuzz
     RAPIDFUZZ_AVAILABLE = True
@@ -30,14 +54,18 @@ except ImportError:
 
 class HubSpotDuplicateChecker:
     def __init__(self):
-        # Environment variables
+        # Environment variables (check multiple possible names)
         self.supabase_url = os.environ.get('SUPABASE_URL')
-        self.supabase_api_key = os.environ.get('SUPABASE_API_KEY')
+        self.supabase_api_key = (
+            os.environ.get('SUPABASE_API_KEY') or 
+            os.environ.get('SUPABASE_SERVICE_ROLE_KEY') or 
+            os.environ.get('SUPABASE_ANON_KEY')
+        )
         self.hubspot_token = os.environ.get('HUBSPOT_TOKEN')
         self.airtable_token = os.environ.get('AIRTABLE_TOKEN')
         
         if not all([self.supabase_url, self.supabase_api_key, self.hubspot_token]):
-            raise ValueError("Missing required environment variables: SUPABASE_URL, SUPABASE_API_KEY, HUBSPOT_TOKEN")
+            raise ValueError("Missing required environment variables: SUPABASE_URL, SUPABASE_API_KEY (or SUPABASE_SERVICE_ROLE_KEY), HUBSPOT_TOKEN")
         
         self.supabase_headers = {
             "apikey": self.supabase_api_key,
@@ -57,13 +85,13 @@ class HubSpotDuplicateChecker:
         
         # Rate limiting tracking
         self.search_api_calls = []
-        self.search_api_limit = 3  # Conservative: 3 requests per second (instead of 5)
+        self.search_api_limit = 4  # Optimized: 4 requests per second (actual limit is 5, leaving buffer)
         
         # Thread-safe rate limiting
         self.crm_api_lock = threading.Lock()
         self.search_api_lock = threading.Lock()
         self.crm_api_calls = []
-        self.crm_api_limit = 80  # Conservative: 80 requests per 10 seconds (instead of 100)
+        self.crm_api_limit = 90  # Optimized: 90 requests per 10 seconds (actual limit is 100, leaving buffer)
         
         # Caching
         self.contact_cache = {}
@@ -72,7 +100,9 @@ class HubSpotDuplicateChecker:
         self.cache_lock = threading.Lock()
         
         # Parallel processing configuration
-        self.max_workers = 3  # Reduced to avoid rate limits
+        # Optimized: 4 workers to use Search API capacity (4 req/s) while staying under CRM API limit (8 req/s)
+        # Each worker makes ~1.5 CRM calls on average, so 4 workers = ~6 req/s (safe margin)
+        self.max_workers = 4
         
         # Setup logging
         logging.basicConfig(
@@ -82,7 +112,7 @@ class HubSpotDuplicateChecker:
         self.logger = logging.getLogger(__name__)
 
     def wait_for_crm_api_rate_limit(self):
-        """Ensure we don't exceed 100 requests per 10 seconds for CRM API"""
+        """Ensure we don't exceed CRM API rate limit (configured limit, actual HubSpot limit is 100 req/10s)"""
         with self.crm_api_lock:
             current_time = time.time()
             
@@ -100,7 +130,7 @@ class HubSpotDuplicateChecker:
             self.crm_api_calls.append(current_time)
 
     def wait_for_search_api_rate_limit(self):
-        """Ensure we don't exceed 5 requests/second for Search API"""
+        """Ensure we don't exceed Search API rate limit (configured limit, actual HubSpot limit is 5 req/s)"""
         with self.search_api_lock:
             current_time = time.time()
             
@@ -120,13 +150,12 @@ class HubSpotDuplicateChecker:
     def get_unprocessed_leads_count(self) -> int:
         """Get total count of unprocessed leads"""
         try:
-            url = f"{self.supabase_url}/rest/v1/contacts_grid_view"
+            url = f"{self.supabase_url}/rest/v1/lead_pipeline_view"
             params = {
-                "select": "id",
+                "select": "property_uuid",
                 "email": "not.is.null",
                 "property_name": "not.is.null",
                 "duplicate_check_completed_at": "is.null",
-                "duplicate_check_fetched_at": "is.null",
                 "limit": "100000"  # Get a large number to count
             }
             
@@ -145,13 +174,12 @@ class HubSpotDuplicateChecker:
         self.logger.info(f"🔍 Fetching batch: size={batch_size}, offset={offset}")
         
         try:
-            url = f"{self.supabase_url}/rest/v1/contacts_grid_view"
+            url = f"{self.supabase_url}/rest/v1/lead_pipeline_view"
             params = {
-                "select": "id,email,first_name,last_name,property_name,country,phone,booking_url",
+                "select": "property_uuid,host_uuid,email,first_name,last_name,property_name,country,phone,booking_url",
                 "email": "not.is.null",
                 "property_name": "not.is.null",
                 "duplicate_check_completed_at": "is.null",
-                "duplicate_check_fetched_at": "is.null",
                 "limit": str(batch_size)
             }
             
@@ -165,76 +193,19 @@ class HubSpotDuplicateChecker:
             leads = response.json()
             self.logger.info(f"✅ Retrieved {len(leads)} leads")
             
-            # Mark as fetched
-            if leads:
-                self.mark_leads_as_fetched([lead['id'] for lead in leads])
+            # Convert property_uuid to id for compatibility
+            for lead in leads:
+                lead['id'] = lead.get('property_uuid', '')
             
             return leads
             
         except Exception as e:
             self.logger.error(f"❌ Error fetching leads: {e}")
             return []
-
-    def mark_leads_as_fetched(self, lead_ids: List[int]) -> bool:
-        """Mark leads as fetched for duplicate checking"""
-        if not lead_ids:
-            return True
-            
-        self.logger.info(f"📝 Marking {len(lead_ids)} leads as fetched...")
-        
-        try:
-            url = f"{self.supabase_url}/rest/v1/contacts_grid_view"
-            current_time = datetime.now().isoformat()
-            
-            # Update in batches
-            batch_size = 100
-            for i in range(0, len(lead_ids), batch_size):
-                batch_ids = lead_ids[i:i + batch_size]
-                id_filter = ",".join(map(str, batch_ids))
-                
-                params = {"id": f"in.({id_filter})"}
-                payload = {"duplicate_check_fetched_at": current_time}
-                
-                response = requests.patch(url, headers=self.supabase_headers, params=params, json=payload)
-                response.raise_for_status()
-                
-                self.logger.info(f"✅ Marked batch {i//batch_size + 1} as fetched ({len(batch_ids)} leads)")
-            
-            return True
-            
-        except Exception as e:
-            self.logger.error(f"❌ Error marking leads as fetched: {e}")
-            return False
-
-    def unmark_leads_as_fetched(self, lead_ids: List[int]) -> bool:
-        """Unmark leads as fetched so they can be processed again"""
-        if not lead_ids:
-            return True
-            
-        self.logger.info(f"🔄 Unmarking {len(lead_ids)} leads as fetched (for retry)...")
-        
-        try:
-            url = f"{self.supabase_url}/rest/v1/contacts_grid_view"
-            
-            # Update in batches
-            batch_size = 100
-            for i in range(0, len(lead_ids), batch_size):
-                batch_ids = lead_ids[i:i + batch_size]
-                id_filter = ",".join(map(str, batch_ids))
-                
-                params = {"id": f"in.({id_filter})"}
-                payload = {"duplicate_check_fetched_at": None}  # Set to NULL
-                
-                response = requests.patch(url, headers=self.supabase_headers, params=params, json=payload)
-                response.raise_for_status()
-                
-                self.logger.info(f"✅ Unmarked batch {i//batch_size + 1} as fetched ({len(batch_ids)} leads)")
-            
-            return True
-            
-        except Exception as e:
-            self.logger.error(f"❌ Error unmarking leads as fetched: {e}")
-            return False
+    
+    # Note: mark_leads_as_fetched and unmark_leads_as_fetched methods removed
+    # The new schema uses duplicate_check_completed_at to track processed leads
+    # No need to mark as "fetched" separately
 
     def search_hubspot_contact(self, lead: Dict) -> Tuple[Optional[str], Dict]:
         """Search for contact in HubSpot by email or phone"""
@@ -482,8 +453,11 @@ class HubSpotDuplicateChecker:
         country_match = False
         if lead_country and deal_country:
             country_codes = {
-                'pl': 'poland', 'de': 'germany', 'es': 'spain',
-                'poland': 'pl', 'germany': 'de', 'spain': 'es'
+                'pl': 'pl', 'poland': 'pl',
+                'de': 'de', 'germany': 'de',
+                'es': 'es', 'spain': 'es',
+                'hr': 'hr', 'croatia': 'hr',
+                'it': 'it', 'italy': 'it'
             }
             lead_country_norm = country_codes.get(lead_country, lead_country)
             deal_country_norm = country_codes.get(deal_country, deal_country)
@@ -507,7 +481,47 @@ class HubSpotDuplicateChecker:
         return location_match, details
 
     def check_alohacamp_existence(self, lead: Dict) -> Tuple[bool, Dict]:
-        """Check if property exists in AlohaCamp (Airtable)"""
+        """Check if property or host exists in AlohaCamp (Supabase + Airtable)"""
+        # First check Supabase (hosts and properties tables)
+        try:
+            from shared.database import Database
+            db = Database()
+            
+            property_exists = False
+            host_exists = False
+            property_uuid = None
+            host_uuid = None
+            
+            # Check Properties table in AlohaCamp Supabase
+            if lead.get('property_name') and lead.get('country'):
+                property_exists, property_uuid = db.check_property_exists(
+                    lead['property_name'],
+                    lead['country']
+                )
+            
+            # Check Hosts table in AlohaCamp Supabase
+            if lead.get('email') or lead.get('phone'):
+                host_exists, host_uuid = db.check_host_exists(
+                    lead.get('email'),
+                    lead.get('phone')
+                )
+            
+            # If found in Supabase, return immediately
+            if property_exists or host_exists:
+                result_data = {
+                    'alohacamp_match_id': property_uuid or host_uuid,
+                    'alohacamp_match_name': lead.get('property_name', '') if property_exists else '',
+                    'alohacamp_source': 'supabase',
+                    'property_exists': property_exists,
+                    'host_exists': host_exists
+                }
+                return True, result_data
+            
+        except Exception as e:
+            self.logger.warning(f"Error checking AlohaCamp Supabase: {e}")
+            # Continue to Airtable check as fallback
+        
+        # Fallback: Check Airtable for properties (legacy)
         if not self.airtable_token:
             return False, {}
         
@@ -515,7 +529,7 @@ class HubSpotDuplicateChecker:
         if not property_name:
             return False, {}
         
-        cache_key = f"aloha_{self.normalize_text(property_name)}"
+        cache_key = f"aloha_airtable_{self.normalize_text(property_name)}"
         with self.cache_lock:
             if cache_key in self.aloha_cache:
                 return self.aloha_cache[cache_key]
@@ -571,7 +585,8 @@ class HubSpotDuplicateChecker:
                             'alohacamp_score': score,
                             'alohacamp_country': aloha_country,
                             'alohacamp_email': aloha_email,
-                            'alohacamp_province': aloha_province
+                            'alohacamp_province': aloha_province,
+                            'alohacamp_source': 'airtable'
                         }
             
             result = (best_match is not None, best_match or {})
@@ -581,65 +596,63 @@ class HubSpotDuplicateChecker:
             return result
             
         except Exception as e:
-            self.logger.warning(f"Error checking AlohaCamp: {e}")
+            self.logger.warning(f"Error checking AlohaCamp Airtable: {e}")
             return False, {}
 
     def update_lead_in_supabase(self, lead: Dict, results: Dict) -> bool:
-        """Update lead with duplicate check results in Supabase"""
+        """Update lead with duplicate check results in Supabase using database module"""
         try:
-            url = f"{self.supabase_url}/rest/v1/contacts_grid_view"
-            params = {"id": f"eq.{lead['id']}"}
+            # Use the shared database module for consistency
+            from shared.database import Database
+            db = Database()
             
-            # Prepare update data
-            update_data = {
-                "duplicate_check_completed_at": datetime.now().isoformat(),
-                "duplicate_check_decision": results.get('decision_reason', 'no_match')
+            property_uuid = lead.get('property_uuid') or lead.get('id')
+            host_uuid = lead.get('host_uuid')
+            
+            if not property_uuid:
+                self.logger.error(f"❌ No property_uuid found for lead")
+                return False
+            
+            # Prepare result dict in format expected by database module
+            db_result = {
+                'already_in_pipeline': results.get('already_in_pipeline', False),
+                'exists_on_alohacamp': results.get('exists_on_alohacamp', False),
+                'decision_reason': results.get('decision_reason', 'no_match'),
+                'domain_blocked': results.get('domain_blocked', False)
             }
             
-            # Add contact data if found
-            if results.get('contact_match_type') != 'none':
-                update_data.update({
-                    "hubspot_contact_match_type": results.get('contact_match_type', 'none'),
-                    "hubspot_contact_id": results.get('contact_id', ''),
-                    "hubspot_contact_email": results.get('contact_email_hs', ''),
-                    "hubspot_contact_phone": results.get('contact_phone_hs', ''),
-                    "already_in_pipeline": results.get('already_in_pipeline', False)
-                })
+            # Add domain rules check
+            if results.get('domain_blocked'):
+                db_result['domain_rules_check'] = 'blocked'
             
-            # Add deal data if found
-            if results.get('deal_match'):
-                update_data.update({
-                    "hubspot_deal_id": results.get('deal_id', ''),
-                    "hubspot_deal_name": results.get('dealname', ''),
-                    "hubspot_deal_score": results.get('deal_score', 0),
-                    "hubspot_deal_stage": results.get('dealstage', ''),
-                    "already_in_pipeline": True
-                })
-            
-            # Add AlohaCamp data if found
-            if results.get('exists_on_alohacamp'):
-                update_data.update({
-                    "exists_on_alohacamp": True,
-                    "alohacamp_match_id": results.get('alohacamp_match_id', ''),
-                    "alohacamp_match_name": results.get('alohacamp_match_name', ''),
-                    "alohacamp_score": results.get('alohacamp_score', 0)
-                })
-            else:
-                update_data["exists_on_alohacamp"] = False
-            
-            response = requests.patch(url, headers=self.supabase_headers, params=params, json=update_data)
-            response.raise_for_status()
-            
-            return True
+            return db.update_hubspot_check_result(property_uuid, host_uuid, db_result)
             
         except Exception as e:
-            self.logger.error(f"❌ Error updating lead {lead['id']}: {e}")
+            self.logger.error(f"❌ Error updating lead {lead.get('id', 'unknown')}: {e}")
+            import traceback
+            traceback.print_exc()
             return False
 
     def process_lead(self, lead: Dict, index: int) -> Dict:
         """Process a single lead for duplicates"""
         if (index + 1) % self.log_every == 0:
             self.logger.info(f"🔍 Processing lead {index + 1}: {lead.get('property_name', 'Unknown')[:50]}")
+        
+        # Check domain blocking first
+        email = lead.get('email', '')
+        is_blocked, block_reason = is_domain_blocked(email)
+        if is_blocked:
+            self.logger.info(f"[BLOCKED] Lead blocked by domain rules: {email} - {block_reason}")
+            return {
+                **lead,
+                'contact_match_type': 'none',
+                'deal_match': False,
+                'already_in_pipeline': True,  # Blocked leads are treated as "in pipeline"
+                'exists_on_alohacamp': False,
+                'decision_reason': f"domain_blocked: {block_reason}",
+                'domain_blocked': True,
+                'block_reason': block_reason
+            }
         
         # Search for contact
         contact_match_type, contact_data = self.search_hubspot_contact(lead)
@@ -685,12 +698,9 @@ class HubSpotDuplicateChecker:
         failed_lead_ids = []  # Track leads that failed to update
         
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            # Submit leads with staggered start times to avoid rate limits
+            # Submit leads to thread pool (rate limiting handled per-API-call, not per-submission)
             future_to_lead = {}
             for i, lead in enumerate(leads_batch):
-                # Add small delay between submissions to spread out API calls
-                if i > 0:
-                    time.sleep(0.1)
                 future = executor.submit(self.process_lead, lead, batch_start_index + i)
                 future_to_lead[future] = lead
             
@@ -714,10 +724,7 @@ class HubSpotDuplicateChecker:
                     batch_errors += 1
                     failed_lead_ids.append(lead['id'])  # Track failed lead
         
-        # Unmark failed leads so they can be processed in the next run
-        if failed_lead_ids:
-            self.logger.info(f"🔄 Unmarking {len(failed_lead_ids)} failed leads for retry...")
-            self.unmark_leads_as_fetched(failed_lead_ids)
+        # Note: Failed leads will be retried automatically on next run since we don't mark as fetched
         
         return processed_results, batch_success, batch_errors
 
@@ -823,7 +830,7 @@ class HubSpotDuplicateChecker:
             'initial_unprocessed': initial_unprocessed,
             'remaining_unprocessed': remaining_unprocessed
         }
-
+    
 def main():
     """Main entry point"""
     try:
@@ -844,7 +851,9 @@ def main():
             sys.exit(2)
             
     except Exception as e:
-        print(f"❌ Fatal error: {e}")
+        print(f"Fatal error: {e}")
+        import traceback
+        traceback.print_exc()
         sys.exit(2)
 
 if __name__ == "__main__":
