@@ -482,44 +482,47 @@ class HubSpotDuplicateChecker:
 
     def check_alohacamp_existence(self, lead: Dict) -> Tuple[bool, Dict]:
         """Check if property or host exists in AlohaCamp (Supabase + Airtable)"""
-        # First check Supabase (hosts and properties tables)
+        # First check Supabase (hosts and properties tables) - only if configured
+        # Skip silently if not configured (no 401 errors logged)
         try:
             from shared.database import Database
             db = Database()
             
-            property_exists = False
-            host_exists = False
-            property_uuid = None
-            host_uuid = None
-            
-            # Check Properties table in AlohaCamp Supabase
-            if lead.get('property_name') and lead.get('country'):
-                property_exists, property_uuid = db.check_property_exists(
-                    lead['property_name'],
-                    lead['country']
-                )
-            
-            # Check Hosts table in AlohaCamp Supabase
-            if lead.get('email') or lead.get('phone'):
-                host_exists, host_uuid = db.check_host_exists(
-                    lead.get('email'),
-                    lead.get('phone')
-                )
-            
-            # If found in Supabase, return immediately
-            if property_exists or host_exists:
-                result_data = {
-                    'alohacamp_match_id': property_uuid or host_uuid,
-                    'alohacamp_match_name': lead.get('property_name', '') if property_exists else '',
-                    'alohacamp_source': 'supabase',
-                    'property_exists': property_exists,
-                    'host_exists': host_exists
-                }
-                return True, result_data
-            
+            # Only check Supabase if we have a separate AlohaCamp key configured
+            alohacamp_key = os.environ.get('ALOHACAMP_SUPABASE_KEY')
+            if alohacamp_key and alohacamp_key != db.supabase_key:
+                property_exists = False
+                host_exists = False
+                property_uuid = None
+                host_uuid = None
+                
+                # Check Properties table in AlohaCamp Supabase
+                if lead.get('property_name') and lead.get('country'):
+                    property_exists, property_uuid = db.check_property_exists(
+                        lead['property_name'],
+                        lead['country']
+                    )
+                
+                # Check Hosts table in AlohaCamp Supabase
+                if lead.get('email') or lead.get('phone'):
+                    host_exists, host_uuid = db.check_host_exists(
+                        lead.get('email'),
+                        lead.get('phone')
+                    )
+                
+                # If found in Supabase, return immediately
+                if property_exists or host_exists:
+                    result_data = {
+                        'alohacamp_match_id': property_uuid or host_uuid,
+                        'alohacamp_match_name': lead.get('property_name', '') if property_exists else '',
+                        'alohacamp_source': 'supabase',
+                        'property_exists': property_exists,
+                        'host_exists': host_exists
+                    }
+                    return True, result_data
         except Exception as e:
-            self.logger.warning(f"Error checking AlohaCamp Supabase: {e}")
-            # Continue to Airtable check as fallback
+            # Silently continue to Airtable if Supabase check fails
+            pass
         
         # Fallback: Check Airtable for properties (legacy)
         if not self.airtable_token:

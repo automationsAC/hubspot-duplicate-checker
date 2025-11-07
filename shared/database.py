@@ -234,6 +234,10 @@ class Database:
     
     def check_property_exists(self, property_name: str, country: str) -> tuple[bool, Optional[str]]:
         """Check if property exists in AlohaCamp Properties table (separate Supabase project)"""
+        # Skip if AlohaCamp key is not set or same as main key (no access)
+        if not self.alohacamp_supabase_key or self.alohacamp_supabase_key == self.supabase_key:
+            return False, None
+        
         url = f"{self.alohacamp_supabase_url}/rest/v1/properties"
         
         params = {
@@ -244,6 +248,11 @@ class Database:
         
         try:
             response = requests.get(url, headers=self.alohacamp_headers, params=params)
+            
+            # If 401, silently skip (no access to AlohaCamp Supabase)
+            if response.status_code == 401:
+                return False, None
+            
             response.raise_for_status()
             properties = response.json()
             
@@ -265,13 +274,23 @@ class Database:
             
             return False, None
             
+        except requests.exceptions.HTTPError as e:
+            # Silently skip on 401 (unauthorized) - AlohaCamp Supabase not configured
+            if e.response.status_code == 401:
+                return False, None
+            # Log other HTTP errors but don't fail
+            return False, None
         except Exception as e:
-            print(f"Error checking property: {e}")
+            # Log other errors but don't fail
             return False, None
     
     def check_host_exists(self, email: Optional[str], phone: Optional[str]) -> tuple[bool, Optional[str]]:
         """Check if host exists in AlohaCamp Hosts table (separate Supabase project)"""
         if not email and not phone:
+            return False, None
+        
+        # Skip if AlohaCamp key is not set or same as main key (no access)
+        if not self.alohacamp_supabase_key or self.alohacamp_supabase_key == self.supabase_key:
             return False, None
         
         url = f"{self.alohacamp_supabase_url}/rest/v1/hosts"
@@ -291,6 +310,11 @@ class Database:
         
         try:
             response = requests.get(url, headers=self.alohacamp_headers, params=params)
+            
+            # If 401, silently skip (no access to AlohaCamp Supabase)
+            if response.status_code == 401:
+                return False, None
+            
             response.raise_for_status()
             hosts = response.json()
             
@@ -299,8 +323,14 @@ class Database:
             
             return False, None
             
+        except requests.exceptions.HTTPError as e:
+            # Silently skip on 401 (unauthorized) - AlohaCamp Supabase not configured
+            if e.response.status_code == 401:
+                return False, None
+            # Log other HTTP errors but don't fail
+            return False, None
         except Exception as e:
-            print(f"Error checking host in AlohaCamp: {e}")
+            # Log other errors but don't fail
             return False, None
     
     def update_hubspot_check_result(self, property_uuid: str, host_uuid: Optional[str], result: Dict) -> bool:
