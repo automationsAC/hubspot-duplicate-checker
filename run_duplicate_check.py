@@ -840,6 +840,11 @@ def main():
         checker = HubSpotDuplicateChecker()
         results = checker.run()
         
+        # If there were no leads to process initially, this is not an error
+        if results.get('initial_unprocessed', 0) == 0:
+            print("✅ No unprocessed leads found - all leads have been processed!")
+            sys.exit(0)
+        
         # Exit with appropriate code
         success_rate = results['successful'] / results['total_processed'] if results['total_processed'] > 0 else 0
         

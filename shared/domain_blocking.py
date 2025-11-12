@@ -329,6 +329,49 @@ BLOCKED_DOMAINS = [
     'ullitravel.com',  # Management company
     'vbvillas.eu',  # Rental/management company
     'villas-guide.com',  # Rental/management company
+    # Austria - Tourism and booking platforms
+    'booking.at',  # Booking.com Austria
+    'airbnb.at',  # Airbnb Austria
+    'tripadvisor.at',  # TripAdvisor Austria
+    'trivago.at',  # Trivago Austria
+    'holidaycheck.at',  # HolidayCheck Austria
+    'skyscanner.at',  # Skyscanner Austria
+    'expedia.at',  # Expedia Austria
+    'hotels.at',  # Hotels.com Austria
+    'hometogo.at',  # HomeToGo Austria
+    'wien.info',  # Vienna tourism board
+    'austria.info',  # Austrian National Tourist Board
+    'austria-tourism.com',  # Austrian tourism
+    'austria-travel.com',  # Austrian travel
+    'visit-austria.com',  # Visit Austria
+    'austria-guide.at',  # Austria guide
+    'austria-tours.at',  # Austria tours
+    'austria-holidays.at',  # Austria holidays
+    # Austria - Property management and real estate
+    'immobilienscout24.at',  # Real estate portal
+    'immowelt.at',  # Real estate portal
+    'willhaben.at',  # Real estate marketplace
+    'immosuchmaschine.at',  # Real estate search
+    'ferienwohnung.at',  # Vacation rental platform
+    'ferienhaus.at',  # Vacation house platform
+    'fewo-direkt.at',  # Vacation rental direct
+    'urlaub.at',  # Vacation/holiday platform
+    'urlaubsservice.at',  # Vacation service
+    'ferienwohnungen.at',  # Vacation apartments
+    'ferienhaeuser.at',  # Vacation houses
+    'apartments.at',  # Apartments platform
+    'holiday-rentals.at',  # Holiday rentals
+    'tirol-ferienwohnung.at',  # Tyrol vacation rentals
+    'salzburg-ferienwohnung.at',  # Salzburg vacation rentals
+    'kaernten-ferienwohnung.at',  # Carinthia vacation rentals
+    'steiermark-ferienwohnung.at',  # Styria vacation rentals
+    'oberoesterreich-ferienwohnung.at',  # Upper Austria vacation rentals
+    'niederoesterreich-ferienwohnung.at',  # Lower Austria vacation rentals
+    'vorarlberg-ferienwohnung.at',  # Vorarlberg vacation rentals
+    'wien-ferienwohnung.at',  # Vienna vacation rentals
+    'bergfex.at',  # Mountain/tourism portal
+    'oebb.at',  # Austrian Railways (travel booking)
+    'restplatzboerse.at',  # Last-minute travel deals
     # Add more blocked domains here
 ]
 
