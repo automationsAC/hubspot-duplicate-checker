@@ -368,26 +368,36 @@ class Database:
             }
             if rows:
                 dc_id = rows[0]['uuid']
+                import sys
+                print(f"📝 PATCH duplicate_checks: {dc_url}?uuid=eq.{dc_id}", flush=True)
+                print(f"📝 Payload: {dc_payload}", flush=True)
+                sys.stdout.flush()
                 r = requests.patch(f"{dc_url}?uuid=eq.{dc_id}", headers=self.headers, json=dc_payload, timeout=self.request_timeout)
                 # Retry on 429 rate limit
                 if r.status_code == 429:
-                    import sys
                     print(f"⚠️ Rate limited (429) on duplicate_checks update, retrying after 5s...", flush=True)
                     sys.stdout.flush()
                     import time
                     time.sleep(5)
                     r = requests.patch(f"{dc_url}?uuid=eq.{dc_id}", headers=self.headers, json=dc_payload, timeout=self.request_timeout)
+                print(f"📝 Response status: {r.status_code}, body: {r.text[:200]}", flush=True)
+                sys.stdout.flush()
                 r.raise_for_status()
             else:
+                import sys
+                print(f"📝 POST duplicate_checks: {dc_url}", flush=True)
+                print(f"📝 Payload: {dc_payload}", flush=True)
+                sys.stdout.flush()
                 r = requests.post(dc_url, headers=self.headers, json=dc_payload, timeout=self.request_timeout)
                 # Retry on 429 rate limit
                 if r.status_code == 429:
-                    import sys
                     print(f"⚠️ Rate limited (429) on duplicate_checks insert, retrying after 5s...", flush=True)
                     sys.stdout.flush()
                     import time
                     time.sleep(5)
                     r = requests.post(dc_url, headers=self.headers, json=dc_payload, timeout=self.request_timeout)
+                print(f"📝 Response status: {r.status_code}, body: {r.text[:200]}", flush=True)
+                sys.stdout.flush()
                 r.raise_for_status()
 
             # Update operations_status with scalar fields (now with proper RLS)
@@ -448,6 +458,18 @@ class Database:
                 traceback.print_exc()
             
             import sys
+            # Verify the update actually worked by querying back
+            verify = requests.get(dc_url, headers=self.headers, params={
+                "select": "checked_at,already_in_pipeline",
+                "property_uuid": f"eq.{property_uuid}",
+                "limit": "1"
+            }, timeout=self.request_timeout)
+            if verify.status_code == 200:
+                verify_data = verify.json()
+                if verify_data:
+                    print(f"✅ VERIFIED: {property_uuid} - checked_at={verify_data[0].get('checked_at')}, already_in_pipeline={verify_data[0].get('already_in_pipeline')}", flush=True)
+                else:
+                    print(f"⚠️ WARNING: Update reported success but record not found in verification!", flush=True)
             print(f"✅ Successfully updated property {property_uuid} in Supabase", flush=True)
             sys.stdout.flush()
             return True
