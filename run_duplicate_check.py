@@ -237,6 +237,25 @@ class HubSpotDuplicateChecker:
                 
                 response = requests.post(url, headers=self.hubspot_headers, json=payload)
                 
+                # Handle rate limiting with retry
+                if response.status_code == 429:
+                    self.logger.warning(f"Rate limited on contact search (email), retrying after 10s...")
+                    time.sleep(10)
+                    self.wait_for_crm_api_rate_limit()
+                    response = requests.post(url, headers=self.hubspot_headers, json=payload)
+                
+                # Check for authentication errors (should not happen, but fail fast if it does)
+                if response.status_code in [401, 403]:
+                    self.logger.error(f"❌ CRITICAL: HubSpot authentication failed (status {response.status_code})")
+                    raise Exception(f"HubSpot authentication error: {response.status_code} - {response.text[:200]}")
+                
+                # Check for server errors with retry
+                if response.status_code >= 500:
+                    self.logger.warning(f"HubSpot server error (status {response.status_code}), retrying...")
+                    time.sleep(5)
+                    self.wait_for_crm_api_rate_limit()
+                    response = requests.post(url, headers=self.hubspot_headers, json=payload)
+                
                 if response.status_code == 200:
                     data = response.json()
                     if data.get('results'):
@@ -250,9 +269,19 @@ class HubSpotDuplicateChecker:
                         with self.cache_lock:
                             self.contact_cache[cache_key] = result
                         return result
+                    # No results found is OK - return 'none'
+                elif response.status_code not in [200, 429]:
+                    # Log unexpected errors but don't fail the entire batch
+                    self.logger.error(f"❌ Contact search by email failed: {response.status_code} - {response.text[:200]}")
                 
+            except requests.exceptions.RequestException as e:
+                # Network errors - log and continue
+                self.logger.error(f"❌ Network error searching contact by email: {e}")
             except Exception as e:
-                self.logger.warning(f"Error searching contact by email: {e}")
+                # Re-raise critical errors (auth failures)
+                if "authentication error" in str(e).lower():
+                    raise
+                self.logger.error(f"❌ Error searching contact by email: {e}")
         
         # Try phone if email didn't work
         if phone:
@@ -288,6 +317,25 @@ class HubSpotDuplicateChecker:
                 
                 response = requests.post(url, headers=self.hubspot_headers, json=payload)
                 
+                # Handle rate limiting with retry
+                if response.status_code == 429:
+                    self.logger.warning(f"Rate limited on contact search (phone), retrying after 10s...")
+                    time.sleep(10)
+                    self.wait_for_crm_api_rate_limit()
+                    response = requests.post(url, headers=self.hubspot_headers, json=payload)
+                
+                # Check for authentication errors
+                if response.status_code in [401, 403]:
+                    self.logger.error(f"❌ CRITICAL: HubSpot authentication failed (status {response.status_code})")
+                    raise Exception(f"HubSpot authentication error: {response.status_code} - {response.text[:200]}")
+                
+                # Check for server errors with retry
+                if response.status_code >= 500:
+                    self.logger.warning(f"HubSpot server error (status {response.status_code}), retrying...")
+                    time.sleep(5)
+                    self.wait_for_crm_api_rate_limit()
+                    response = requests.post(url, headers=self.hubspot_headers, json=payload)
+                
                 if response.status_code == 200:
                     data = response.json()
                     if data.get('results'):
@@ -301,9 +349,19 @@ class HubSpotDuplicateChecker:
                         with self.cache_lock:
                             self.contact_cache[cache_key] = result
                         return result
+                    # No results found is OK - return 'none'
+                elif response.status_code not in [200, 429]:
+                    # Log unexpected errors but don't fail the entire batch
+                    self.logger.error(f"❌ Contact search by phone failed: {response.status_code} - {response.text[:200]}")
                 
+            except requests.exceptions.RequestException as e:
+                # Network errors - log and continue
+                self.logger.error(f"❌ Network error searching contact by phone: {e}")
             except Exception as e:
-                self.logger.warning(f"Error searching contact by phone: {e}")
+                # Re-raise critical errors (auth failures)
+                if "authentication error" in str(e).lower():
+                    raise
+                self.logger.error(f"❌ Error searching contact by phone: {e}")
         
         return ('none', {
             'contact_id': '',
