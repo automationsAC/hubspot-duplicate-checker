@@ -79,10 +79,10 @@ class HubSpotDuplicateChecker:
         }
         
         # Configuration
-        self.batch_size = 10  # TEST: Process only 10 leads
-        self.max_batches = 1  # Process 1 batch per run
+        self.batch_size = 500  # Process 500 leads per batch
+        self.max_batches = 1  # Process only 1 batch (500 leads) per run
         self.log_every = 1  # Log every lead
-        self.update_every = 10  # TEST: Update all 10 leads in one batch
+        self.update_every = 50  # Update database every 50 leads
         
         # Rate limiting tracking
         self.search_api_calls = []
