@@ -359,10 +359,12 @@ class BatchHubSpotChecker:
             # - City + name strong = accept
             # - Name very strong = accept
             accept_match = False
-            has_url = 'url_exact' in signals
             
             # Special rule: For 100% name matches with word count mismatch, REQUIRE URL or CITY match
             if name_score >= 99.5 and not word_count_match:
+                # Cascade: URL → City → Reject
+                has_url = 'url_exact' in signals
+                
                 if has_url:
                     accept_match = True  # URL match is strongest signal
                 elif city and deal_city:
@@ -372,9 +374,12 @@ class BatchHubSpotChecker:
                         accept_match = True
                     else:
                         accept_match = False  # REJECT - different cities
+                elif booking_url and deal_booking_url:
+                    # Have URLs but they didn't match earlier (no url_exact signal)
+                    accept_match = False  # REJECT - URLs don't match
                 else:
                     accept_match = False  # REJECT - no URL and no city data
-            elif has_url:
+            elif 'url_exact' in signals:
                 accept_match = True
             elif combined_score >= 90:
                 accept_match = True

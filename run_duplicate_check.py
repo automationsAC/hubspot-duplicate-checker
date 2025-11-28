@@ -407,21 +407,47 @@ class HubSpotDuplicateChecker:
                 
                 accept_match = False
                 
-                # Special rule: For 100% name matches with word count mismatch, REQUIRE CITY match (not just country)
+                # Special rule: For 100% name matches with word count mismatch, REQUIRE URL or CITY match
                 # This prevents "Oasis" matching "Oasis Rural"
                 if score >= 99.5 and not word_count_match:
-                    # For 100% matches with word diff, we need CITY match (country alone is not enough)
-                    lead_city = (lead.get('city', '') or '').strip()
-                    deal_city = (deal['properties'].get('city', '') or '').strip()
+                    # Cascade: URL → City → Reject
+                    lead_url = (lead.get('booking_url', '') or '').strip()
+                    deal_url = (deal['properties'].get('booking_url', '') or '').strip()
                     
-                    if lead_city and deal_city:
-                        city_score = fuzz.ratio(lead_city.lower(), deal_city.lower())
-                        if city_score >= 90:
-                            accept_match = True  # OK - city matches
+                    # 1. Check URL first (strongest signal)
+                    if lead_url and deal_url:
+                        # Extract booking.com slug for comparison
+                        import re
+                        lead_slug_match = re.search(r'booking\.com/hotel/[^/]+/([^\.?]+)', lead_url)
+                        deal_slug_match = re.search(r'booking\.com/hotel/[^/]+/([^\.?]+)', deal_url)
+                        
+                        if lead_slug_match and deal_slug_match:
+                            lead_slug = lead_slug_match.group(1).lower()
+                            deal_slug = deal_slug_match.group(1).lower()
+                            if lead_slug == deal_slug:
+                                accept_match = True  # OK - URL matches!
+                            else:
+                                accept_match = False  # REJECT - different URLs
                         else:
-                            accept_match = False  # REJECT - different cities
+                            # URL exists but can't parse - check city
+                            lead_city = (lead.get('city', '') or '').strip()
+                            deal_city = (deal['properties'].get('city', '') or '').strip()
+                            
+                            if lead_city and deal_city:
+                                city_score = fuzz.ratio(lead_city.lower(), deal_city.lower())
+                                accept_match = (city_score >= 90)
+                            else:
+                                accept_match = False  # REJECT - no city
                     else:
-                        accept_match = False  # REJECT - missing city data
+                        # 2. No URL - check city
+                        lead_city = (lead.get('city', '') or '').strip()
+                        deal_city = (deal['properties'].get('city', '') or '').strip()
+                        
+                        if lead_city and deal_city:
+                            city_score = fuzz.ratio(lead_city.lower(), deal_city.lower())
+                            accept_match = (city_score >= 90)
+                        else:
+                            accept_match = False  # REJECT - no URL and no city
                 elif is_strong and is_location_ok:
                     accept_match = True
                 elif is_medium and is_location_ok:
