@@ -407,13 +407,21 @@ class HubSpotDuplicateChecker:
                 
                 accept_match = False
                 
-                # Special rule: For 100% name matches with word count mismatch, REQUIRE location
+                # Special rule: For 100% name matches with word count mismatch, REQUIRE CITY match (not just country)
                 # This prevents "Oasis" matching "Oasis Rural"
-                if score == 100 and not word_count_match:
-                    if is_location_ok:
-                        accept_match = True
+                if score >= 99.5 and not word_count_match:
+                    # For 100% matches with word diff, we need CITY match (country alone is not enough)
+                    lead_city = (lead.get('city', '') or '').strip()
+                    deal_city = (deal['properties'].get('city', '') or '').strip()
+                    
+                    if lead_city and deal_city:
+                        city_score = fuzz.ratio(lead_city.lower(), deal_city.lower())
+                        if city_score >= 90:
+                            accept_match = True  # OK - city matches
+                        else:
+                            accept_match = False  # REJECT - different cities
                     else:
-                        accept_match = False  # REJECT
+                        accept_match = False  # REJECT - missing city data
                 elif is_strong and is_location_ok:
                     accept_match = True
                 elif is_medium and is_location_ok:
