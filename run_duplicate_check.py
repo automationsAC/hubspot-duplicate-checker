@@ -332,6 +332,12 @@ class HubSpotDuplicateChecker:
         if not property_name:
             return False, {}
         
+        # SPECIAL RULE: Skip fuzzy matching for HR/IT/AT countries
+        lead_country = (lead.get('country', '') or '').strip().lower()
+        if lead_country in ['hr', 'croatia', 'hrvatska', 'it', 'italy', 'italia', 'at', 'austria', 'österreich', 'osterreich']:
+            self.logger.info(f"Skipping fuzzy match for {lead_country} country: {property_name}")
+            return False, {}
+        
         # Normalize property name for search
         normalized_property = self.normalize_text(property_name)
         search_terms = normalized_property.split()[:3]  # Use top 3 words
@@ -380,21 +386,35 @@ class HubSpotDuplicateChecker:
                 if not deal_name:
                     continue
                 
-                # Calculate fuzzy scores
-                token_set_score = fuzz.token_set_ratio(normalized_property, self.normalize_text(deal_name))
-                partial_token_score = fuzz.partial_token_sort_ratio(normalized_property, self.normalize_text(deal_name))
-                score = max(token_set_score, partial_token_score)
+                # Calculate fuzzy scores - use AVERAGE instead of MAX
+                normalized_deal = self.normalize_text(deal_name)
+                token_set_score = fuzz.token_set_ratio(normalized_property, normalized_deal)
+                partial_token_score = fuzz.partial_token_sort_ratio(normalized_property, normalized_deal)
+                score = (token_set_score + partial_token_score) / 2  # Average instead of max
+                
+                # Check word count - for 100% matches with word diff, require location match
+                lead_words = len(normalized_property.split())
+                deal_words = len(normalized_deal.split())
+                word_count_match = (lead_words == deal_words)
                 
                 # Check location match
                 location_match, location_details = self.check_location_match(lead, deal)
                 
-                # Scoring logic
+                # Scoring logic with special 100% rule
                 is_strong = score >= 92
                 is_medium = 85 <= score < 92
                 is_location_ok = location_match
                 
                 accept_match = False
-                if is_strong and is_location_ok:
+                
+                # Special rule: For 100% name matches with word count mismatch, REQUIRE location
+                # This prevents "Oasis" matching "Oasis Rural"
+                if score == 100 and not word_count_match:
+                    if is_location_ok:
+                        accept_match = True
+                    else:
+                        accept_match = False  # REJECT
+                elif is_strong and is_location_ok:
                     accept_match = True
                 elif is_medium and is_location_ok:
                     accept_match = True
@@ -433,10 +453,12 @@ class HubSpotDuplicateChecker:
         # Convert to lowercase and remove extra spaces
         text = re.sub(r'\s+', ' ', text.lower().strip())
         
-        # Remove common stop words for property names
-        stop_words = ['hotel', 'pension', 'ferienwohnung', 'ferienhaus', 'apartment', 'villa', 'resort']
+        # Remove common stop words ONLY for names with 3+ words
+        # This prevents "Ferienhaus Waldblick" → "waldblick" (too short!)
         words = text.split()
-        words = [w for w in words if w not in stop_words]
+        if len(words) >= 3:
+            stop_words = ['hotel', 'pension', 'ferienwohnung', 'ferienhaus', 'apartment', 'villa', 'resort']
+            words = [w for w in words if w not in stop_words]
         
         return ' '.join(words)
 
@@ -449,15 +471,31 @@ class HubSpotDuplicateChecker:
         deal_city = (deal['properties'].get('city', '') or '').strip().lower()
         deal_address = (deal['properties'].get('address', '') or '').strip().lower()
         
-        # Country matching
+        # Country matching with comprehensive mapping
         country_match = False
         if lead_country and deal_country:
             country_codes = {
-                'pl': 'pl', 'poland': 'pl',
-                'de': 'de', 'germany': 'de',
-                'es': 'es', 'spain': 'es',
-                'hr': 'hr', 'croatia': 'hr',
-                'it': 'it', 'italy': 'it'
+                'pl': 'pl', 'poland': 'pl', 'polska': 'pl',
+                'de': 'de', 'germany': 'de', 'deutschland': 'de',
+                'es': 'es', 'spain': 'es', 'españa': 'es', 'espana': 'es',
+                'hr': 'hr', 'croatia': 'hr', 'hrvatska': 'hr',
+                'it': 'it', 'italy': 'it', 'italia': 'it',
+                'fr': 'fr', 'france': 'fr',
+                'at': 'at', 'austria': 'at', 'österreich': 'at', 'osterreich': 'at',
+                'ch': 'ch', 'switzerland': 'ch', 'schweiz': 'ch',
+                'nl': 'nl', 'netherlands': 'nl', 'nederland': 'nl',
+                'be': 'be', 'belgium': 'be', 'belgique': 'be',
+                'pt': 'pt', 'portugal': 'pt',
+                'cz': 'cz', 'czech republic': 'cz', 'czechia': 'cz',
+                'sk': 'sk', 'slovakia': 'sk',
+                'hu': 'hu', 'hungary': 'hu',
+                'ro': 'ro', 'romania': 'ro',
+                'bg': 'bg', 'bulgaria': 'bg',
+                'gr': 'gr', 'greece': 'gr',
+                'si': 'si', 'slovenia': 'si',
+                'ee': 'ee', 'estonia': 'ee',
+                'lv': 'lv', 'latvia': 'lv',
+                'lt': 'lt', 'lithuania': 'lt'
             }
             lead_country_norm = country_codes.get(lead_country, lead_country)
             deal_country_norm = country_codes.get(deal_country, deal_country)
