@@ -360,14 +360,20 @@ class BatchHubSpotChecker:
             # - Name very strong = accept
             accept_match = False
             has_url = 'url_exact' in signals
-            has_city = any('city_match' in s for s in signals)
             
-            # Special rule: For 100% name matches with word count mismatch, REQUIRE URL or City
-            if name_score == 100 and not word_count_match:
-                if has_url or has_city:
-                    accept_match = True
+            # Special rule: For 100% name matches with word count mismatch, REQUIRE URL or CITY match
+            if name_score >= 99.5 and not word_count_match:
+                if has_url:
+                    accept_match = True  # URL match is strongest signal
+                elif city and deal_city:
+                    # Need actual city match (90%+), not just country
+                    city_match_score = fuzz.ratio(self.normalize_text(city), self.normalize_text(deal_city))
+                    if city_match_score >= 90:
+                        accept_match = True
+                    else:
+                        accept_match = False  # REJECT - different cities
                 else:
-                    accept_match = False  # REJECT - prevents "Oasis" matching "Oasis Rural"
+                    accept_match = False  # REJECT - no URL and no city data
             elif has_url:
                 accept_match = True
             elif combined_score >= 90:
