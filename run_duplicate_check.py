@@ -176,7 +176,7 @@ class HubSpotDuplicateChecker:
         try:
             url = f"{self.supabase_url}/rest/v1/lead_pipeline_view"
             params = {
-                "select": "property_uuid,host_uuid,email,first_name,last_name,property_name,country,phone,booking_url",
+                "select": "property_uuid,host_uuid,email,first_name,last_name,property_name,country,phone,booking_url,city",
                 "email": "not.is.null",
                 "property_name": "not.is.null",
                 "duplicate_check_completed_at": "is.null",

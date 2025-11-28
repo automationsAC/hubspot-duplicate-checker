@@ -359,9 +359,13 @@ class BatchHubSpotChecker:
             # - City + name strong = accept
             # - Name very strong = accept
             accept_match = False
+            special_rule_applied = False  # Flag to skip other rules
             
             # Special rule: For 100% name matches with word count mismatch, REQUIRE URL or CITY match
+            # This prevents "Oasis" matching "Oasis Rural"
             if name_score >= 99.5 and not word_count_match:
+                special_rule_applied = True
+                
                 # Cascade: URL → City → Reject
                 has_url = 'url_exact' in signals
                 
@@ -379,12 +383,15 @@ class BatchHubSpotChecker:
                     accept_match = False  # REJECT - URLs don't match
                 else:
                     accept_match = False  # REJECT - no URL and no city data
-            elif 'url_exact' in signals:
-                accept_match = True
-            elif combined_score >= 90:
-                accept_match = True
-            elif name_score >= 92 and location_match:
-                accept_match = True
+            
+            # Normal rules - ONLY if special rule wasn't applied
+            if not special_rule_applied:
+                if 'url_exact' in signals:
+                    accept_match = True
+                elif combined_score >= 90:
+                    accept_match = True
+                elif name_score >= 92 and location_match:
+                    accept_match = True
             
             if accept_match and combined_score > best_score:
                 best_score = combined_score

@@ -293,7 +293,7 @@ class HubSpotLeadChecker:
             payload = {
                 "query": search_query,
                 "limit": 20,
-                "properties": ["dealname", "dealstage", "country", "city", "address"]
+                "properties": ["dealname", "dealstage", "country", "city", "address", "booking_url"]
             }
             
             response = requests.post(url, headers=self.hubspot_headers, json=payload)
@@ -324,26 +324,78 @@ class HubSpotLeadChecker:
                 if not deal_name:
                     continue
                 
-                # Calculate fuzzy scores
+                # Calculate fuzzy scores - use AVERAGE instead of MAX
                 token_set_score = fuzz.token_set_ratio(normalized_property, self.normalize_text(deal_name))
                 partial_token_score = fuzz.partial_token_sort_ratio(normalized_property, self.normalize_text(deal_name))
-                score = max(token_set_score, partial_token_score)
+                score = (token_set_score + partial_token_score) / 2  # Average instead of max
+                
+                # Check word count - for 100% matches with word diff, require location match
+                lead_words = len(normalized_property.split())
+                deal_words = len(self.normalize_text(deal_name).split())
+                word_count_match = (lead_words == deal_words)
                 
                 # Check location match
                 location_match, location_details = self.check_location_match(lead, deal)
                 
-                # Scoring logic
+                # Scoring logic with special 100% rule
                 is_strong = score >= 92
                 is_medium = 85 <= score < 92
                 is_location_ok = location_match
                 
                 accept_match = False
-                if is_strong and is_location_ok:
-                    accept_match = True
-                elif is_medium and is_location_ok:
-                    accept_match = True
-                elif is_strong and score >= 90:  # Strong match even without location
-                    accept_match = True
+                special_rule_applied = False  # Flag to skip other rules
+                
+                # Special rule: For 100% name matches with word count mismatch, REQUIRE URL or CITY match
+                # This prevents "Oasis" matching "Oasis Rural"
+                if score >= 99.5 and not word_count_match:
+                    special_rule_applied = True
+                    
+                    # Cascade: URL → City → Reject
+                    lead_url = (lead.get('booking_url', '') or '').strip()
+                    deal_url = (deal['properties'].get('booking_url', '') or '').strip()
+                    
+                    # 1. Check URL first (strongest signal)
+                    if lead_url and deal_url:
+                        # Extract booking.com slug for comparison
+                        lead_slug_match = re.search(r'booking\.com/hotel/[^/]+/([^\.?]+)', lead_url)
+                        deal_slug_match = re.search(r'booking\.com/hotel/[^/]+/([^\.?]+)', deal_url)
+                        
+                        if lead_slug_match and deal_slug_match:
+                            lead_slug = lead_slug_match.group(1).lower()
+                            deal_slug = deal_slug_match.group(1).lower()
+                            if lead_slug == deal_slug:
+                                accept_match = True  # OK - URL matches!
+                            else:
+                                accept_match = False  # REJECT - different URLs
+                        else:
+                            # URL exists but can't parse - check city
+                            lead_city = (lead.get('city', '') or '').strip()
+                            deal_city = (deal['properties'].get('city', '') or '').strip()
+                            
+                            if lead_city and deal_city:
+                                city_score = fuzz.ratio(lead_city.lower(), deal_city.lower())
+                                accept_match = (city_score >= 90)
+                            else:
+                                accept_match = False  # REJECT - no city
+                    else:
+                        # 2. No URL - check city
+                        lead_city = (lead.get('city', '') or '').strip()
+                        deal_city = (deal['properties'].get('city', '') or '').strip()
+                        
+                        if lead_city and deal_city:
+                            city_score = fuzz.ratio(lead_city.lower(), deal_city.lower())
+                            accept_match = (city_score >= 90)
+                        else:
+                            accept_match = False  # REJECT - no URL and no city
+                
+                # Normal rules - ONLY if special rule wasn't applied
+                if not special_rule_applied:
+                    if is_strong and is_location_ok:
+                        accept_match = True
+                    elif is_medium and is_location_ok:
+                        accept_match = True
+                    elif is_strong and score >= 90:
+                        accept_match = True
                 
                 if accept_match and score > best_score:
                     best_score = score
