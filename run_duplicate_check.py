@@ -406,10 +406,13 @@ class HubSpotDuplicateChecker:
                 is_location_ok = location_match
                 
                 accept_match = False
+                special_rule_applied = False  # Flag to skip other rules
                 
                 # Special rule: For 100% name matches with word count mismatch, REQUIRE URL or CITY match
                 # This prevents "Oasis" matching "Oasis Rural"
                 if score >= 99.5 and not word_count_match:
+                    special_rule_applied = True
+                    
                     # Cascade: URL → City → Reject
                     lead_url = (lead.get('booking_url', '') or '').strip()
                     deal_url = (deal['properties'].get('booking_url', '') or '').strip()
@@ -448,12 +451,15 @@ class HubSpotDuplicateChecker:
                             accept_match = (city_score >= 90)
                         else:
                             accept_match = False  # REJECT - no URL and no city
-                elif is_strong and is_location_ok:
-                    accept_match = True
-                elif is_medium and is_location_ok:
-                    accept_match = True
-                elif is_strong and score >= 90:
-                    accept_match = True
+                
+                # Normal rules - ONLY if special rule wasn't applied
+                if not special_rule_applied:
+                    if is_strong and is_location_ok:
+                        accept_match = True
+                    elif is_medium and is_location_ok:
+                        accept_match = True
+                    elif is_strong and score >= 90:
+                        accept_match = True
                 
                 if accept_match and score > best_score:
                     best_score = score
