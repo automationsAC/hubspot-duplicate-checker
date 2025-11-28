@@ -25,6 +25,9 @@ class Database:
             "Prefer": "return=minimal"
         }
         
+        # Connection timeout settings
+        self.request_timeout = (10, 30)  # (connect timeout, read timeout) in seconds
+        
         # AlohaCamp Supabase project (separate from main project)
         self.alohacamp_supabase_url = os.environ.get('ALOHACAMP_SUPABASE_URL', 'https://ggrrekgtbfwcovllbovl.supabase.co')
         self.alohacamp_supabase_key = os.environ.get('ALOHACAMP_SUPABASE_KEY') or self.supabase_key
@@ -344,7 +347,7 @@ class Database:
                 "select": "uuid",
                 "property_uuid": f"eq.{property_uuid}",
                 "limit": "1"
-            })
+            }, timeout=self.request_timeout)
             find.raise_for_status()
             rows = find.json()
             # Set domain_rules_check based on domain_blocked flag
@@ -365,10 +368,10 @@ class Database:
             }
             if rows:
                 dc_id = rows[0]['uuid']
-                r = requests.patch(f"{dc_url}?uuid=eq.{dc_id}", headers=self.headers, json=dc_payload)
+                r = requests.patch(f"{dc_url}?uuid=eq.{dc_id}", headers=self.headers, json=dc_payload, timeout=self.request_timeout)
                 r.raise_for_status()
             else:
-                r = requests.post(dc_url, headers=self.headers, json=dc_payload)
+                r = requests.post(dc_url, headers=self.headers, json=dc_payload, timeout=self.request_timeout)
                 r.raise_for_status()
 
             # Update operations_status with scalar fields (now with proper RLS)
@@ -381,7 +384,7 @@ class Database:
                     "property_uuid": f"eq.{property_uuid}",
                     "host_uuid": "is.null",  # Only match rows with property_uuid only
                     "limit": "1"
-                })
+                }, timeout=self.request_timeout)
                 find_os.raise_for_status()
                 os_rows = find_os.json()
                 
@@ -393,7 +396,7 @@ class Database:
                 if os_rows:
                     # Update existing row
                     os_uuid = os_rows[0]['uuid']
-                    r = requests.patch(f"{os_url}?uuid=eq.{os_uuid}", headers=self.headers, json=os_update)
+                    r = requests.patch(f"{os_url}?uuid=eq.{os_uuid}", headers=self.headers, json=os_update, timeout=self.request_timeout)
                     r.raise_for_status()
                 else:
                     # Insert new row with property_uuid only (host_uuid = NULL per constraint)
@@ -402,15 +405,19 @@ class Database:
                         "host_uuid": None,  # Must be NULL per valid_lead_reference constraint
                         **os_update
                     }
-                    r = requests.post(os_url, headers=self.headers, json=os_insert)
+                    r = requests.post(os_url, headers=self.headers, json=os_insert, timeout=self.request_timeout)
                     r.raise_for_status()
             except Exception as os_error:
                 # Log but don't fail the whole operation if operations_status update fails
-                print(f"Warning: Could not update operations_status for property {property_uuid}: {os_error}")
+                print(f"⚠️ WARNING: Could not update operations_status for property {property_uuid}: {os_error}")
+                import traceback
+                traceback.print_exc()
             
             return True
         except Exception as e:
-            print(f"Error updating duplicate check for property {property_uuid}: {e}")
+            print(f"❌ ERROR updating duplicate check for property {property_uuid}: {e}")
+            import traceback
+            traceback.print_exc()
             return False
     
     def update_zerobounce_result(self, property_uuid: str, host_uuid: Optional[str], email: str, result: Dict) -> bool:
@@ -459,7 +466,7 @@ class Database:
                     "property_uuid": f"eq.{property_uuid}",
                     "host_uuid": "is.null",  # Only match rows with property_uuid only
                     "limit": "1"
-                })
+                }, timeout=self.request_timeout)
                 find_os.raise_for_status()
                 os_rows = find_os.json()
                 
@@ -471,7 +478,7 @@ class Database:
                 if os_rows:
                     # Update existing row
                     os_uuid = os_rows[0]['uuid']
-                    r = requests.patch(f"{os_url}?uuid=eq.{os_uuid}", headers=self.headers, json=os_update)
+                    r = requests.patch(f"{os_url}?uuid=eq.{os_uuid}", headers=self.headers, json=os_update, timeout=self.request_timeout)
                     r.raise_for_status()
                 else:
                     # Insert new row with property_uuid only (host_uuid = NULL per constraint)
@@ -480,11 +487,13 @@ class Database:
                         "host_uuid": None,  # Must be NULL per valid_lead_reference constraint
                         **os_update
                     }
-                    r = requests.post(os_url, headers=self.headers, json=os_insert)
+                    r = requests.post(os_url, headers=self.headers, json=os_insert, timeout=self.request_timeout)
                     r.raise_for_status()
             except Exception as os_error:
                 # Log but don't fail the whole operation if operations_status update fails
-                print(f"Warning: Could not update operations_status for property {property_uuid}: {os_error}")
+                print(f"⚠️ WARNING: Could not update operations_status for property {property_uuid}: {os_error}")
+                import traceback
+                traceback.print_exc()
             
             return True
         except Exception as e:

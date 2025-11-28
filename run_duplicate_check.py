@@ -79,9 +79,10 @@ class HubSpotDuplicateChecker:
         }
         
         # Configuration
-        self.batch_size = 500
-        self.max_batches = 2
-        self.log_every = 100
+        self.batch_size = 500  # Process 500 leads per run
+        self.max_batches = 1  # Process 1 batch per run
+        self.log_every = 1  # Log every lead
+        self.update_every = 50  # Update database every 50 leads
         
         # Rate limiting tracking
         self.search_api_calls = []
@@ -764,7 +765,13 @@ class HubSpotDuplicateChecker:
             if results.get('domain_blocked'):
                 db_result['domain_rules_check'] = 'blocked'
             
-            return db.update_hubspot_check_result(property_uuid, host_uuid, db_result)
+            # Debug logging
+            self.logger.debug(f"Updating property {property_uuid}: already_in_pipeline={db_result['already_in_pipeline']}")
+            
+            success = db.update_hubspot_check_result(property_uuid, host_uuid, db_result)
+            if not success:
+                self.logger.error(f"❌ Database update returned False for property {property_uuid}")
+            return success
             
         except Exception as e:
             self.logger.error(f"❌ Error updating lead {lead.get('id', 'unknown')}: {e}")
@@ -772,10 +779,10 @@ class HubSpotDuplicateChecker:
             traceback.print_exc()
             return False
 
-    def process_lead(self, lead: Dict, index: int) -> Dict:
+    def process_lead(self, lead: Dict, index: int, total: int) -> Dict:
         """Process a single lead for duplicates"""
-        if (index + 1) % self.log_every == 0:
-            self.logger.info(f"🔍 Processing lead {index + 1}: {lead.get('property_name', 'Unknown')[:50]}")
+        # Always log progress with X/Total format
+        self.logger.info(f"[{index + 1}/{total}] Processing: {lead.get('property_name', 'Unknown')[:50]}")
         
         # Check domain blocking first
         email = lead.get('email', '')
@@ -829,41 +836,53 @@ class HubSpotDuplicateChecker:
         
         return result
 
-    def process_lead_batch(self, leads_batch: List[Dict], batch_start_index: int) -> Tuple[List[Dict], int, int]:
-        """Process a batch of leads in parallel"""
+    def process_lead_batch(self, leads_batch: List[Dict], batch_start_index: int, total_in_batch: int) -> Tuple[List[Dict], int, int]:
+        """Process a batch of leads with updates every N leads"""
         batch_success = 0
         batch_errors = 0
         processed_results = []
-        failed_lead_ids = []  # Track leads that failed to update
+        pending_updates = []  # Store leads waiting to be updated
         
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            # Submit leads to thread pool (rate limiting handled per-API-call, not per-submission)
+            # Submit leads to thread pool
             future_to_lead = {}
             for i, lead in enumerate(leads_batch):
-                future = executor.submit(self.process_lead, lead, batch_start_index + i)
-                future_to_lead[future] = lead
+                future = executor.submit(self.process_lead, lead, batch_start_index + i, total_in_batch)
+                future_to_lead[future] = (lead, batch_start_index + i)
             
-            # Process completed futures
+            # Process completed futures and update database every N leads
             for future in as_completed(future_to_lead):
-                lead = future_to_lead[future]
+                lead, index = future_to_lead[future]
                 try:
                     result = future.result()
-                    
-                    # Update in Supabase
-                    if self.update_lead_in_supabase(lead, result):
-                        batch_success += 1
-                    else:
-                        batch_errors += 1
-                        failed_lead_ids.append(lead['id'])  # Track failed lead
-                    
                     processed_results.append(result)
+                    pending_updates.append((lead, result))
+                    
+                    # Update database every N leads or at the end
+                    if len(pending_updates) >= self.update_every or len(processed_results) == len(leads_batch):
+                        self.logger.info(f"💾 Updating database for {len(pending_updates)} leads...")
+                        update_success = 0
+                        update_errors = 0
+                        
+                        for pending_lead, pending_result in pending_updates:
+                            try:
+                                if self.update_lead_in_supabase(pending_lead, pending_result):
+                                    update_success += 1
+                                else:
+                                    update_errors += 1
+                                    self.logger.error(f"❌ Failed to update lead {pending_lead.get('property_uuid', 'unknown')} in database")
+                            except Exception as e:
+                                update_errors += 1
+                                self.logger.error(f"❌ Exception updating lead {pending_lead.get('property_uuid', 'unknown')}: {e}")
+                        
+                        batch_success += update_success
+                        batch_errors += update_errors
+                        self.logger.info(f"✅ Database updated: {update_success} success, {update_errors} errors")
+                        pending_updates = []  # Clear pending updates
                     
                 except Exception as e:
-                    self.logger.error(f"Error processing lead {lead.get('id')}: {e}")
+                    self.logger.error(f"❌ Error processing lead {lead.get('id')}: {e}")
                     batch_errors += 1
-                    failed_lead_ids.append(lead['id'])  # Track failed lead
-        
-        # Note: Failed leads will be retried automatically on next run since we don't mark as fetched
         
         return processed_results, batch_success, batch_errors
 
@@ -926,8 +945,9 @@ class HubSpotDuplicateChecker:
             
             # Process leads in parallel
             self.logger.info(f"⚡ Processing {len(leads)} leads with {self.max_workers} parallel workers...")
+            self.logger.info(f"📊 Database updates will occur every {self.update_every} leads")
             
-            processed_results, batch_success, batch_errors = self.process_lead_batch(leads, (batch_num - 1) * self.batch_size)
+            processed_results, batch_success, batch_errors = self.process_lead_batch(leads, (batch_num - 1) * self.batch_size, len(leads))
             
             total_processed += len(leads)
             total_success += batch_success
@@ -944,22 +964,35 @@ class HubSpotDuplicateChecker:
         remaining_unprocessed = self.get_unprocessed_leads_count()
         
         # Final summary
-        self.logger.info(f"\n🎉 FINAL SUMMARY:")
-        self.logger.info(f"   📋 Unprocessed leads in DB (start): {initial_unprocessed:,}")
-        self.logger.info(f"   📊 Leads processed this run: {total_processed}")
-        self.logger.info(f"   ✅ Successful updates: {total_success}")
-        self.logger.info(f"   ❌ Errors: {total_errors}")
-        self.logger.info(f"   📋 Unprocessed leads in DB (end): {remaining_unprocessed:,}")
-        self.logger.info(f"   📈 Success rate: {total_success/total_processed*100:.1f}%" if total_processed > 0 else "   Success rate: 0%")
-        self.logger.info(f"   ⏱️ Total time elapsed: {elapsed:.1f} seconds")
-        self.logger.info(f"   🚀 Overall rate: {total_processed/elapsed:.1f} leads/second")
+        self.logger.info(f"\n" + "=" * 80)
+        self.logger.info(f"🎉 FINAL SUMMARY")
+        self.logger.info(f"=" * 80)
+        self.logger.info(f"📋 DATABASE STATUS:")
+        self.logger.info(f"   Before: {initial_unprocessed:,} unprocessed leads")
+        self.logger.info(f"   After:  {remaining_unprocessed:,} unprocessed leads")
+        self.logger.info(f"   Progress: {initial_unprocessed - remaining_unprocessed:,} leads completed")
+        self.logger.info(f"")
+        self.logger.info(f"📊 THIS RUN:")
+        self.logger.info(f"   Processed: {total_processed} leads")
+        self.logger.info(f"   ✅ Success: {total_success} ({total_success/total_processed*100:.1f}%)" if total_processed > 0 else "   Success: 0")
+        self.logger.info(f"   ❌ Errors:  {total_errors} ({total_errors/total_processed*100:.1f}%)" if total_processed > 0 else "   Errors: 0")
+        self.logger.info(f"")
+        self.logger.info(f"⏱️ PERFORMANCE:")
+        self.logger.info(f"   Time elapsed: {elapsed:.1f} seconds ({elapsed/60:.1f} minutes)")
+        self.logger.info(f"   Processing rate: {total_processed/elapsed:.1f} leads/second")
         
+        self.logger.info(f"")
         if remaining_unprocessed == 0:
-            self.logger.info("🎯 ALL LEADS PROCESSED! Database is now fully processed.")
+            self.logger.info("🎯 STATUS: ALL LEADS PROCESSED! ✨")
+            self.logger.info("   Database is now fully processed.")
         elif remaining_unprocessed < initial_unprocessed:
             progress_percent = ((initial_unprocessed - remaining_unprocessed) / initial_unprocessed) * 100
-            self.logger.info(f"📈 Database progress: {progress_percent:.1f}% of total leads completed")
-            self.logger.info(f"🔄 Next run will process the remaining {remaining_unprocessed:,} leads")
+            self.logger.info(f"🎯 STATUS: In Progress")
+            self.logger.info(f"   Total completion: {progress_percent:.1f}%")
+            self.logger.info(f"   Remaining: {remaining_unprocessed:,} leads")
+            estimated_runs = (remaining_unprocessed + self.batch_size - 1) // self.batch_size
+            self.logger.info(f"   Estimated runs needed: ~{estimated_runs}")
+        self.logger.info(f"=" * 80)
         
         return {
             'total_processed': total_processed,
