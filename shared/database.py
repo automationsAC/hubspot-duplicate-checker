@@ -369,9 +369,21 @@ class Database:
             if rows:
                 dc_id = rows[0]['uuid']
                 r = requests.patch(f"{dc_url}?uuid=eq.{dc_id}", headers=self.headers, json=dc_payload, timeout=self.request_timeout)
+                # Retry on 429 rate limit
+                if r.status_code == 429:
+                    print(f"⚠️ Rate limited (429) on duplicate_checks update, retrying after 5s...")
+                    import time
+                    time.sleep(5)
+                    r = requests.patch(f"{dc_url}?uuid=eq.{dc_id}", headers=self.headers, json=dc_payload, timeout=self.request_timeout)
                 r.raise_for_status()
             else:
                 r = requests.post(dc_url, headers=self.headers, json=dc_payload, timeout=self.request_timeout)
+                # Retry on 429 rate limit
+                if r.status_code == 429:
+                    print(f"⚠️ Rate limited (429) on duplicate_checks insert, retrying after 5s...")
+                    import time
+                    time.sleep(5)
+                    r = requests.post(dc_url, headers=self.headers, json=dc_payload, timeout=self.request_timeout)
                 r.raise_for_status()
 
             # Update operations_status with scalar fields (now with proper RLS)
@@ -397,6 +409,12 @@ class Database:
                     # Update existing row
                     os_uuid = os_rows[0]['uuid']
                     r = requests.patch(f"{os_url}?uuid=eq.{os_uuid}", headers=self.headers, json=os_update, timeout=self.request_timeout)
+                    # Retry on 429 rate limit
+                    if r.status_code == 429:
+                        print(f"⚠️ Rate limited (429) on operations_status update, retrying after 5s...")
+                        import time
+                        time.sleep(5)
+                        r = requests.patch(f"{os_url}?uuid=eq.{os_uuid}", headers=self.headers, json=os_update, timeout=self.request_timeout)
                     r.raise_for_status()
                 else:
                     # Insert new row with property_uuid only (host_uuid = NULL per constraint)
@@ -406,6 +424,12 @@ class Database:
                         **os_update
                     }
                     r = requests.post(os_url, headers=self.headers, json=os_insert, timeout=self.request_timeout)
+                    # Retry on 429 rate limit
+                    if r.status_code == 429:
+                        print(f"⚠️ Rate limited (429) on operations_status insert, retrying after 5s...")
+                        import time
+                        time.sleep(5)
+                        r = requests.post(os_url, headers=self.headers, json=os_insert, timeout=self.request_timeout)
                     r.raise_for_status()
             except Exception as os_error:
                 # Log but don't fail the whole operation if operations_status update fails

@@ -79,10 +79,10 @@ class HubSpotDuplicateChecker:
         }
         
         # Configuration
-        self.batch_size = 500  # Process 500 leads per run
+        self.batch_size = 10  # TEST: Process only 10 leads
         self.max_batches = 1  # Process 1 batch per run
         self.log_every = 1  # Log every lead
-        self.update_every = 50  # Update database every 50 leads
+        self.update_every = 10  # TEST: Update all 10 leads in one batch
         
         # Rate limiting tracking
         self.search_api_calls = []
@@ -111,6 +111,10 @@ class HubSpotDuplicateChecker:
             format='%(asctime)s - %(levelname)s - %(message)s'
         )
         self.logger = logging.getLogger(__name__)
+        
+        # Initialize database connection ONCE (reuse for all updates)
+        from shared.database import Database
+        self.db = Database()
 
     def wait_for_crm_api_rate_limit(self):
         """Ensure we don't exceed CRM API rate limit (configured limit, actual HubSpot limit is 100 req/10s)"""
@@ -622,12 +626,9 @@ class HubSpotDuplicateChecker:
         # First check Supabase (hosts and properties tables) - only if configured
         # Skip silently if not configured (no 401 errors logged)
         try:
-            from shared.database import Database
-            db = Database()
-            
             # Only check Supabase if we have a separate AlohaCamp key configured
             alohacamp_key = os.environ.get('ALOHACAMP_SUPABASE_KEY')
-            if alohacamp_key and alohacamp_key != db.supabase_key:
+            if alohacamp_key and alohacamp_key != self.db.supabase_key:
                 property_exists = False
                 host_exists = False
                 property_uuid = None
@@ -635,14 +636,14 @@ class HubSpotDuplicateChecker:
                 
                 # Check Properties table in AlohaCamp Supabase
                 if lead.get('property_name') and lead.get('country'):
-                    property_exists, property_uuid = db.check_property_exists(
+                    property_exists, property_uuid = self.db.check_property_exists(
                         lead['property_name'],
                         lead['country']
                     )
                 
                 # Check Hosts table in AlohaCamp Supabase
                 if lead.get('email') or lead.get('phone'):
-                    host_exists, host_uuid = db.check_host_exists(
+                    host_exists, host_uuid = self.db.check_host_exists(
                         lead.get('email'),
                         lead.get('phone')
                     )
@@ -742,10 +743,6 @@ class HubSpotDuplicateChecker:
     def update_lead_in_supabase(self, lead: Dict, results: Dict) -> bool:
         """Update lead with duplicate check results in Supabase using database module"""
         try:
-            # Use the shared database module for consistency
-            from shared.database import Database
-            db = Database()
-            
             property_uuid = lead.get('property_uuid') or lead.get('id')
             host_uuid = lead.get('host_uuid')
             
@@ -768,7 +765,8 @@ class HubSpotDuplicateChecker:
             # Debug logging
             self.logger.debug(f"Updating property {property_uuid}: already_in_pipeline={db_result['already_in_pipeline']}")
             
-            success = db.update_hubspot_check_result(property_uuid, host_uuid, db_result)
+            # Use the shared Database instance (initialized once in __init__)
+            success = self.db.update_hubspot_check_result(property_uuid, host_uuid, db_result)
             if not success:
                 self.logger.error(f"❌ Database update returned False for property {property_uuid}")
             return success
