@@ -371,7 +371,9 @@ class Database:
                 r = requests.patch(f"{dc_url}?uuid=eq.{dc_id}", headers=self.headers, json=dc_payload, timeout=self.request_timeout)
                 # Retry on 429 rate limit
                 if r.status_code == 429:
-                    print(f"⚠️ Rate limited (429) on duplicate_checks update, retrying after 5s...")
+                    import sys
+                    print(f"⚠️ Rate limited (429) on duplicate_checks update, retrying after 5s...", flush=True)
+                    sys.stdout.flush()
                     import time
                     time.sleep(5)
                     r = requests.patch(f"{dc_url}?uuid=eq.{dc_id}", headers=self.headers, json=dc_payload, timeout=self.request_timeout)
@@ -380,7 +382,9 @@ class Database:
                 r = requests.post(dc_url, headers=self.headers, json=dc_payload, timeout=self.request_timeout)
                 # Retry on 429 rate limit
                 if r.status_code == 429:
-                    print(f"⚠️ Rate limited (429) on duplicate_checks insert, retrying after 5s...")
+                    import sys
+                    print(f"⚠️ Rate limited (429) on duplicate_checks insert, retrying after 5s...", flush=True)
+                    sys.stdout.flush()
                     import time
                     time.sleep(5)
                     r = requests.post(dc_url, headers=self.headers, json=dc_payload, timeout=self.request_timeout)
@@ -411,7 +415,9 @@ class Database:
                     r = requests.patch(f"{os_url}?uuid=eq.{os_uuid}", headers=self.headers, json=os_update, timeout=self.request_timeout)
                     # Retry on 429 rate limit
                     if r.status_code == 429:
-                        print(f"⚠️ Rate limited (429) on operations_status update, retrying after 5s...")
+                        import sys
+                        print(f"⚠️ Rate limited (429) on operations_status update, retrying after 5s...", flush=True)
+                        sys.stdout.flush()
                         import time
                         time.sleep(5)
                         r = requests.patch(f"{os_url}?uuid=eq.{os_uuid}", headers=self.headers, json=os_update, timeout=self.request_timeout)
@@ -426,20 +432,31 @@ class Database:
                     r = requests.post(os_url, headers=self.headers, json=os_insert, timeout=self.request_timeout)
                     # Retry on 429 rate limit
                     if r.status_code == 429:
-                        print(f"⚠️ Rate limited (429) on operations_status insert, retrying after 5s...")
+                        import sys
+                        print(f"⚠️ Rate limited (429) on operations_status insert, retrying after 5s...", flush=True)
+                        sys.stdout.flush()
                         import time
                         time.sleep(5)
                         r = requests.post(os_url, headers=self.headers, json=os_insert, timeout=self.request_timeout)
                     r.raise_for_status()
             except Exception as os_error:
                 # Log but don't fail the whole operation if operations_status update fails
-                print(f"⚠️ WARNING: Could not update operations_status for property {property_uuid}: {os_error}")
+                import sys
+                print(f"⚠️ WARNING: Could not update operations_status for property {property_uuid}: {os_error}", flush=True)
+                sys.stdout.flush()
                 import traceback
                 traceback.print_exc()
             
+            import sys
+            print(f"✅ Successfully updated property {property_uuid} in Supabase", flush=True)
+            sys.stdout.flush()
             return True
         except Exception as e:
-            print(f"❌ ERROR updating duplicate check for property {property_uuid}: {e}")
+            import sys
+            print(f"❌ ERROR updating duplicate check for property {property_uuid}: {e}", flush=True)
+            print(f"   Supabase URL: {self.supabase_url}", flush=True)
+            print(f"   Key being used: {self.supabase_key[:30]}...", flush=True)
+            sys.stdout.flush()
             import traceback
             traceback.print_exc()
             return False
@@ -515,7 +532,9 @@ class Database:
                     r.raise_for_status()
             except Exception as os_error:
                 # Log but don't fail the whole operation if operations_status update fails
-                print(f"⚠️ WARNING: Could not update operations_status for property {property_uuid}: {os_error}")
+                import sys
+                print(f"⚠️ WARNING: Could not update operations_status for property {property_uuid}: {os_error}", flush=True)
+                sys.stdout.flush()
                 import traceback
                 traceback.print_exc()
             

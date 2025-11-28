@@ -115,6 +115,17 @@ class HubSpotDuplicateChecker:
         # Initialize database connection ONCE (reuse for all updates)
         from shared.database import Database
         self.db = Database()
+        
+        # Log which key is being used (for debugging Render issues)
+        key_source = "unknown"
+        if os.environ.get('SUPABASE_SERVICE_ROLE_KEY'):
+            key_source = "SUPABASE_SERVICE_ROLE_KEY"
+        elif os.environ.get('SUPABASE_ANON_KEY'):
+            key_source = "SUPABASE_ANON_KEY"
+        elif os.environ.get('SUPABASE_API_KEY'):
+            key_source = "SUPABASE_API_KEY"
+        self.logger.info(f"🔑 Using Supabase key from: {key_source}")
+        self.logger.info(f"🔑 Key preview: {self.db.supabase_key[:30]}...")
 
     def wait_for_crm_api_rate_limit(self):
         """Ensure we don't exceed CRM API rate limit (configured limit, actual HubSpot limit is 100 req/10s)"""
@@ -862,16 +873,21 @@ class HubSpotDuplicateChecker:
                         update_success = 0
                         update_errors = 0
                         
-                        for pending_lead, pending_result in pending_updates:
+                        for idx, (pending_lead, pending_result) in enumerate(pending_updates, 1):
+                            property_uuid = pending_lead.get('property_uuid', 'unknown')
+                            self.logger.info(f"   [{idx}/{len(pending_updates)}] Updating {property_uuid[:20]}... already_in_pipeline={pending_result.get('already_in_pipeline')}")
                             try:
                                 if self.update_lead_in_supabase(pending_lead, pending_result):
                                     update_success += 1
+                                    self.logger.info(f"   ✅ [{idx}/{len(pending_updates)}] Success: {property_uuid[:20]}...")
                                 else:
                                     update_errors += 1
-                                    self.logger.error(f"❌ Failed to update lead {pending_lead.get('property_uuid', 'unknown')} in database")
+                                    self.logger.error(f"   ❌ [{idx}/{len(pending_updates)}] FAILED: {property_uuid[:20]}... - update returned False")
                             except Exception as e:
                                 update_errors += 1
-                                self.logger.error(f"❌ Exception updating lead {pending_lead.get('property_uuid', 'unknown')}: {e}")
+                                self.logger.error(f"   ❌ [{idx}/{len(pending_updates)}] EXCEPTION: {property_uuid[:20]}... - {e}")
+                                import traceback
+                                self.logger.error(traceback.format_exc())
                         
                         batch_success += update_success
                         batch_errors += update_errors
@@ -891,6 +907,8 @@ class HubSpotDuplicateChecker:
         self.logger.info("🚀 Starting HubSpot Duplicate Check - Render Version (Parallel)")
         self.logger.info(f"📊 Batch size: {self.batch_size}, Max batches: {self.max_batches}")
         self.logger.info(f"⚡ Parallel workers: {self.max_workers}")
+        self.logger.info(f"🌐 Supabase URL: {self.supabase_url}")
+        self.logger.info(f"🔑 Database key source: {self.db.supabase_key[:30]}... (length: {len(self.db.supabase_key)})")
         
         # Check initial unprocessed count
         initial_unprocessed = self.get_unprocessed_leads_count()
